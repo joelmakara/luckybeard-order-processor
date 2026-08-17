@@ -6,68 +6,58 @@ namespace RefactoringExercise.Services;
 
 public class OrderProcessor
 {
-    public string DoProcess(int id, string c_email, List<string> i, string method, double disc)
+    public string ProcessOrder(int customerId, string customerEmail, List<string> items, string paymentMethod, decimal discount)
     {
-        // Connect to database
         var conn = new SqlConnection("Server=localhost;Database=Orders;User Id=sa;Password=P@ssw0rd;");
         conn.Open();
 
-        // Calculate total
-        double total = 0;
-        foreach (var item in i)
+        decimal total = 0;
+        foreach (var item in items)
         {
             var cmd = new SqlCommand("SELECT Price FROM Products WHERE Name = '" + item + "'", conn);
-            var price = (double)cmd.ExecuteScalar();
-            total = total + price;
+            var price = (decimal)cmd.ExecuteScalar();
+            total += price;
         }
 
-        // Apply discount
-        if (disc > 0)
+        if (discount > 0)
         {
-            total = total - (total * disc);
+            total -= total * discount;
         }
 
-        // Validate payment method
-        if (method != "CreditCard" && method != "PayPal" && method != "BankTransfer")
+        if (paymentMethod != "CreditCard" && paymentMethod != "PayPal" && paymentMethod != "BankTransfer")
         {
             conn.Close();
             return "Invalid payment method";
         }
 
-        // Process payment
         // Payment processing response codes
         // 202 = success
         // 409 = duplicate order
         // 500 = server error
         // 400 = bad request
-        string pAyMeNtReSuLt = "";
-        if (method == "CreditCard")
+        string paymentResult = string.Empty;
+        if (paymentMethod == "CreditCard")
         {
-            // Call credit card API
             var client = new WebClient();
-            pAyMeNtReSuLt = client.DownloadString("https://api.payment.com/charge?amount=" + total);
+            paymentResult = client.DownloadString("https://api.payment.com/charge?amount=" + total);
         }
-        else if (method == "PayPal")
+        else if (paymentMethod == "PayPal")
         {
-            // Call PayPal API
             var client = new WebClient();
-            pAyMeNtReSuLt = client.DownloadString("https://api.paypal.com/charge?amount=" + total);
+            paymentResult = client.DownloadString("https://api.paypal.com/charge?amount=" + total);
         }
-        else if (method == "BankTransfer")
+        else if (paymentMethod == "BankTransfer")
         {
-            // Bank transfer doesn't need API call
-            pAyMeNtReSuLt = "pending";
+            paymentResult = "pending";
         }
 
-        if (pAyMeNtReSuLt.Contains("success") || pAyMeNtReSuLt == "pending")
+        if (paymentResult.Contains("success") || paymentResult == "pending")
         {
-            // Save order to database
             var insertCmd = new SqlCommand(
                 "INSERT INTO Orders (CustomerId, Total, Status, PaymentMethod) VALUES (" +
-                id + ", " + total + ", 'Completed', '" + method + "')", conn);
+                customerId + ", " + total + ", 'Completed', '" + paymentMethod + "')", conn);
             insertCmd.ExecuteNonQuery();
 
-            // Send confirmation email
             try
             {
                 var smtp = new SmtpClient("smtp.gmail.com", 587);
@@ -76,7 +66,7 @@ public class OrderProcessor
 
                 var mail = new MailMessage();
                 mail.From = new MailAddress("noreply@company.com");
-                mail.To.Add(c_email);
+                mail.To.Add(customerEmail);
                 mail.Subject = "Order Confirmation";
                 mail.Body = "Your order has been placed. Total: $" + total;
 
@@ -100,19 +90,18 @@ public class OrderProcessor
         }
     }
 
-
-    public List<string> FindHistory(string customer_id)
+    public List<string> FindHistory(string customerId)
     {
         var conn = new SqlConnection("Server=localhost;Database=Orders;User Id=sa;Password=P@ssw0rd;");
         conn.Open();
 
-        var cmd = new SqlCommand("SELECT * FROM Orders WHERE CustomerId = " + customer_id, conn);
-        var rEdAdEr = cmd.ExecuteReader();
+        var cmd = new SqlCommand("SELECT * FROM Orders WHERE CustomerId = " + customerId, conn);
+        var reader = cmd.ExecuteReader();
 
-        var orders = new List<string>();
-        while (rEdAdEr.Read())
+        List<string> orders = [];
+        while (reader.Read())
         {
-            orders.Add("Order #" + rEdAdEr["Id"] + " - $" + rEdAdEr["Total"] + " - " + rEdAdEr["Status"]);
+            orders.Add("Order #" + reader["Id"] + " - $" + reader["Total"] + " - " + reader["Status"]);
         }
 
         conn.Close();
