@@ -1,52 +1,47 @@
 using System.Data.SqlClient;
 using System.Net;
 using System.Net.Mail;
+using RefactoringExercise.Models;
 
 namespace RefactoringExercise.Services;
 
-public class OrderProcessor
+public class OrderProcessor : IOrderProcessor
 {
-    public string ProcessOrder(int customerId, string customerEmail, List<string> items, string paymentMethod, decimal discount)
+    public OrderResult ProcessOrder(ProcessRequest request)
     {
+        if (!Enum.TryParse<PaymentMethod>(request.PaymentMethod, out var paymentMethod))
+        {
+            return new OrderResult(OrderOutcome.InvalidPaymentMethod, 0);
+        }
+
         var conn = new SqlConnection("Server=localhost;Database=Orders;User Id=sa;Password=P@ssw0rd;");
         conn.Open();
 
         decimal total = 0;
-        foreach (var item in items)
+        foreach (var item in request.Items)
         {
             var cmd = new SqlCommand("SELECT Price FROM Products WHERE Name = '" + item + "'", conn);
             var price = (decimal)cmd.ExecuteScalar();
             total += price;
         }
 
-        if (discount > 0)
+        if (request.Discount > 0)
         {
-            total -= total * discount;
+            total -= total * request.Discount;
         }
 
-        if (paymentMethod != "CreditCard" && paymentMethod != "PayPal" && paymentMethod != "BankTransfer")
-        {
-            conn.Close();
-            return "Invalid payment method";
-        }
-
-        // Payment processing response codes
-        // 202 = success
-        // 409 = duplicate order
-        // 500 = server error
-        // 400 = bad request
         string paymentResult = string.Empty;
-        if (paymentMethod == "CreditCard")
+        if (paymentMethod == PaymentMethod.CreditCard)
         {
             var client = new WebClient();
             paymentResult = client.DownloadString("https://api.payment.com/charge?amount=" + total);
         }
-        else if (paymentMethod == "PayPal")
+        else if (paymentMethod == PaymentMethod.PayPal)
         {
             var client = new WebClient();
             paymentResult = client.DownloadString("https://api.paypal.com/charge?amount=" + total);
         }
-        else if (paymentMethod == "BankTransfer")
+        else if (paymentMethod == PaymentMethod.BankTransfer)
         {
             paymentResult = "pending";
         }
@@ -55,7 +50,7 @@ public class OrderProcessor
         {
             var insertCmd = new SqlCommand(
                 "INSERT INTO Orders (CustomerId, Total, Status, PaymentMethod) VALUES (" +
-                customerId + ", " + total + ", 'Completed', '" + paymentMethod + "')", conn);
+                request.CustomerId + ", " + total + ", 'Completed', '" + paymentMethod + "')", conn);
             insertCmd.ExecuteNonQuery();
 
             try
@@ -66,27 +61,27 @@ public class OrderProcessor
 
                 var mail = new MailMessage();
                 mail.From = new MailAddress("noreply@company.com");
-                mail.To.Add(customerEmail);
+                mail.To.Add(request.CustomerEmail);
                 mail.Subject = "Order Confirmation";
                 mail.Body = "Your order has been placed. Total: $" + total;
 
                 smtp.Send(mail);
 
                 conn.Close();
-                return "Order processed successfully. Total: $" + total;
+                return new OrderResult(OrderOutcome.Completed, total);
             }
             catch (Exception ex)
             {
                 // Log error but don't fail the order
                 Console.WriteLine("Email failed: " + ex.Message);
                 conn.Close();
-                return "Order processed but email failed. Total: $" + total;
+                return new OrderResult(OrderOutcome.CompletedEmailFailed, total);
             }
         }
         else
         {
             conn.Close();
-            return "Payment failed";
+            return new OrderResult(OrderOutcome.PaymentFailed, total);
         }
     }
 
