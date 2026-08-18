@@ -6,6 +6,14 @@ untouched in the first commit, so the git history reads as the refactor
 itself: each commit is one reviewable step from a god-class to a working,
 tested API.
 
+## Process
+
+I built this in collaboration with an AI coding assistant. The refactoring
+plan, the review of every change, the design decisions and their trade-offs,
+and the commit sequence are my own; the assistant drafted code and prose
+against that direction, and nothing was committed before I had reviewed and,
+where needed, amended it.
+
 ## Running it
 
 The only requirement is the .NET 10 SDK. In Development the API uses a local
