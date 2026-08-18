@@ -5,5 +5,7 @@ public enum OrderOutcome
     Completed,
     CompletedEmailFailed,
     PaymentFailed,
-    InvalidPaymentMethod
+    InvalidPaymentMethod,
+    CustomerNotFound,
+    ProductNotFound
 }

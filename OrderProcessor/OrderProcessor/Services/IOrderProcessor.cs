@@ -4,7 +4,7 @@ namespace RefactoringExercise.Services;
 
 public interface IOrderProcessor
 {
-    OrderResult ProcessOrder(ProcessRequest request);
+    Task<OrderResult> ProcessOrderAsync(ProcessRequest request, CancellationToken cancellationToken = default);
 
-    List<string> FindHistory(string customerId);
+    Task<List<Order>> GetOrderHistoryAsync(int customerId, CancellationToken cancellationToken = default);
 }

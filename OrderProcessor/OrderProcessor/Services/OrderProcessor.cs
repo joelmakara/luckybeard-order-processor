@@ -1,37 +1,45 @@
-using System.Data.SqlClient;
 using System.Net;
 using System.Net.Mail;
-using Microsoft.Extensions.Configuration;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using RefactoringExercise.Data;
 using RefactoringExercise.Models;
 using RefactoringExercise.Options;
 
 namespace RefactoringExercise.Services;
 
 public class OrderProcessor(
-    IConfiguration configuration,
+    OrdersDbContext db,
     IOptions<SmtpOptions> smtpOptions,
     IOptions<PaymentProviderOptions> paymentProviderOptions) : IOrderProcessor
 {
-    private readonly string _connectionString = configuration.GetConnectionString("Orders")
-        ?? throw new InvalidOperationException("Connection string 'Orders' is not configured.");
-
-    public OrderResult ProcessOrder(ProcessRequest request)
+    public async Task<OrderResult> ProcessOrderAsync(ProcessRequest request, CancellationToken cancellationToken = default)
     {
         if (!Enum.TryParse<PaymentMethod>(request.PaymentMethod, out var paymentMethod))
         {
             return new OrderResult(OrderOutcome.InvalidPaymentMethod, 0);
         }
 
-        var conn = new SqlConnection(_connectionString);
-        conn.Open();
+        var customerExists = await db.Customers.AnyAsync(c => c.Id == request.CustomerId, cancellationToken);
+        if (!customerExists)
+        {
+            return new OrderResult(OrderOutcome.CustomerNotFound, 0);
+        }
+
+        var products = await db.Products
+            .Where(p => request.Items.Contains(p.Name))
+            .ToListAsync(cancellationToken);
 
         decimal total = 0;
         foreach (var item in request.Items)
         {
-            var cmd = new SqlCommand("SELECT Price FROM Products WHERE Name = '" + item + "'", conn);
-            var price = (decimal)cmd.ExecuteScalar();
-            total += price;
+            var product = products.FirstOrDefault(p => p.Name == item);
+            if (product is null)
+            {
+                return new OrderResult(OrderOutcome.ProductNotFound, 0);
+            }
+
+            total += product.Price;
         }
 
         if (request.Discount > 0)
@@ -56,61 +64,56 @@ public class OrderProcessor(
             paymentResult = "pending";
         }
 
-        if (paymentResult.Contains("success") || paymentResult == "pending")
+        if (!paymentResult.Contains("success") && paymentResult != "pending")
         {
-            var insertCmd = new SqlCommand(
-                "INSERT INTO Orders (CustomerId, Total, Status, PaymentMethod) VALUES (" +
-                request.CustomerId + ", " + total + ", 'Completed', '" + paymentMethod + "')", conn);
-            insertCmd.ExecuteNonQuery();
-
-            var smtpSettings = smtpOptions.Value;
-            try
-            {
-                var smtp = new SmtpClient(smtpSettings.Host, smtpSettings.Port);
-                smtp.Credentials = new NetworkCredential(smtpSettings.Username, smtpSettings.Password);
-                smtp.EnableSsl = true;
-
-                var mail = new MailMessage();
-                mail.From = new MailAddress(smtpSettings.FromAddress);
-                mail.To.Add(request.CustomerEmail);
-                mail.Subject = "Order Confirmation";
-                mail.Body = "Your order has been placed. Total: $" + total;
-
-                smtp.Send(mail);
-
-                conn.Close();
-                return new OrderResult(OrderOutcome.Completed, total);
-            }
-            catch (Exception ex)
-            {
-                // Log error but don't fail the order
-                Console.WriteLine("Email failed: " + ex.Message);
-                conn.Close();
-                return new OrderResult(OrderOutcome.CompletedEmailFailed, total);
-            }
-        }
-        else
-        {
-            conn.Close();
             return new OrderResult(OrderOutcome.PaymentFailed, total);
         }
-    }
 
-    public List<string> FindHistory(string customerId)
-    {
-        var conn = new SqlConnection(_connectionString);
-        conn.Open();
-
-        var cmd = new SqlCommand("SELECT * FROM Orders WHERE CustomerId = " + customerId, conn);
-        var reader = cmd.ExecuteReader();
-
-        List<string> orders = [];
-        while (reader.Read())
+        // The transaction deliberately covers only database work; it must
+        // never be held open across the external payment or email calls.
+        await using (var transaction = await db.Database.BeginTransactionAsync(cancellationToken))
         {
-            orders.Add("Order #" + reader["Id"] + " - $" + reader["Total"] + " - " + reader["Status"]);
+            db.Orders.Add(new Order
+            {
+                CustomerId = request.CustomerId,
+                Total = total,
+                Status = paymentResult == "pending" ? OrderStatus.Pending : OrderStatus.Completed,
+                PaymentMethod = paymentMethod
+            });
+
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
         }
 
-        conn.Close();
-        return orders;
+        var smtpSettings = smtpOptions.Value;
+        try
+        {
+            var smtp = new SmtpClient(smtpSettings.Host, smtpSettings.Port);
+            smtp.Credentials = new NetworkCredential(smtpSettings.Username, smtpSettings.Password);
+            smtp.EnableSsl = true;
+
+            var mail = new MailMessage();
+            mail.From = new MailAddress(smtpSettings.FromAddress);
+            mail.To.Add(request.CustomerEmail);
+            mail.Subject = "Order Confirmation";
+            mail.Body = "Your order has been placed. Total: $" + total;
+
+            smtp.Send(mail);
+
+            return new OrderResult(OrderOutcome.Completed, total);
+        }
+        catch (Exception ex)
+        {
+            // Log error but don't fail the order
+            Console.WriteLine("Email failed: " + ex.Message);
+            return new OrderResult(OrderOutcome.CompletedEmailFailed, total);
+        }
     }
+
+    public Task<List<Order>> GetOrderHistoryAsync(int customerId, CancellationToken cancellationToken = default)
+        => db.Orders
+            .AsNoTracking()
+            .Where(o => o.CustomerId == customerId)
+            .OrderByDescending(o => o.Id)
+            .ToListAsync(cancellationToken);
 }
