@@ -1,12 +1,21 @@
 using System.Data.SqlClient;
 using System.Net;
 using System.Net.Mail;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
 using RefactoringExercise.Models;
+using RefactoringExercise.Options;
 
 namespace RefactoringExercise.Services;
 
-public class OrderProcessor : IOrderProcessor
+public class OrderProcessor(
+    IConfiguration configuration,
+    IOptions<SmtpOptions> smtpOptions,
+    IOptions<PaymentProviderOptions> paymentProviderOptions) : IOrderProcessor
 {
+    private readonly string _connectionString = configuration.GetConnectionString("Orders")
+        ?? throw new InvalidOperationException("Connection string 'Orders' is not configured.");
+
     public OrderResult ProcessOrder(ProcessRequest request)
     {
         if (!Enum.TryParse<PaymentMethod>(request.PaymentMethod, out var paymentMethod))
@@ -14,7 +23,7 @@ public class OrderProcessor : IOrderProcessor
             return new OrderResult(OrderOutcome.InvalidPaymentMethod, 0);
         }
 
-        var conn = new SqlConnection("Server=localhost;Database=Orders;User Id=sa;Password=P@ssw0rd;");
+        var conn = new SqlConnection(_connectionString);
         conn.Open();
 
         decimal total = 0;
@@ -30,16 +39,17 @@ public class OrderProcessor : IOrderProcessor
             total -= total * request.Discount;
         }
 
+        var providers = paymentProviderOptions.Value;
         string paymentResult = string.Empty;
         if (paymentMethod == PaymentMethod.CreditCard)
         {
             var client = new WebClient();
-            paymentResult = client.DownloadString("https://api.payment.com/charge?amount=" + total);
+            paymentResult = client.DownloadString(providers.CreditCardChargeUrl + "?amount=" + total);
         }
         else if (paymentMethod == PaymentMethod.PayPal)
         {
             var client = new WebClient();
-            paymentResult = client.DownloadString("https://api.paypal.com/charge?amount=" + total);
+            paymentResult = client.DownloadString(providers.PayPalChargeUrl + "?amount=" + total);
         }
         else if (paymentMethod == PaymentMethod.BankTransfer)
         {
@@ -53,14 +63,15 @@ public class OrderProcessor : IOrderProcessor
                 request.CustomerId + ", " + total + ", 'Completed', '" + paymentMethod + "')", conn);
             insertCmd.ExecuteNonQuery();
 
+            var smtpSettings = smtpOptions.Value;
             try
             {
-                var smtp = new SmtpClient("smtp.gmail.com", 587);
-                smtp.Credentials = new NetworkCredential("noreply@company.com", "P@ssw0rd123");
+                var smtp = new SmtpClient(smtpSettings.Host, smtpSettings.Port);
+                smtp.Credentials = new NetworkCredential(smtpSettings.Username, smtpSettings.Password);
                 smtp.EnableSsl = true;
 
                 var mail = new MailMessage();
-                mail.From = new MailAddress("noreply@company.com");
+                mail.From = new MailAddress(smtpSettings.FromAddress);
                 mail.To.Add(request.CustomerEmail);
                 mail.Subject = "Order Confirmation";
                 mail.Body = "Your order has been placed. Total: $" + total;
@@ -87,7 +98,7 @@ public class OrderProcessor : IOrderProcessor
 
     public List<string> FindHistory(string customerId)
     {
-        var conn = new SqlConnection("Server=localhost;Database=Orders;User Id=sa;Password=P@ssw0rd;");
+        var conn = new SqlConnection(_connectionString);
         conn.Open();
 
         var cmd = new SqlCommand("SELECT * FROM Orders WHERE CustomerId = " + customerId, conn);
