@@ -1,21 +1,30 @@
-using System.Net;
-using System.Net.Mail;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Options;
 using RefactoringExercise.Data;
+using RefactoringExercise.Email;
 using RefactoringExercise.Models;
-using RefactoringExercise.Options;
+using RefactoringExercise.Payments;
 
 namespace RefactoringExercise.Services;
 
 public class OrderProcessor(
     OrdersDbContext db,
-    IOptions<SmtpOptions> smtpOptions,
-    IOptions<PaymentProviderOptions> paymentProviderOptions) : IOrderProcessor
+    IEnumerable<IPaymentStrategy> paymentStrategies,
+    IEmailSender emailSender,
+    ILogger<OrderProcessor> logger) : IOrderProcessor
 {
+    private const string ConfirmationEmailSubject = "Order Confirmation";
+
     public async Task<OrderResult> ProcessOrderAsync(ProcessRequest request, CancellationToken cancellationToken = default)
     {
+        // The API layer validates the request; this guard keeps the
+        // processor safe for any other caller.
         if (!Enum.TryParse<PaymentMethod>(request.PaymentMethod, out var paymentMethod))
+        {
+            return new OrderResult(OrderOutcome.InvalidPaymentMethod, 0);
+        }
+
+        var strategy = paymentStrategies.FirstOrDefault(s => s.Method == paymentMethod);
+        if (strategy is null)
         {
             return new OrderResult(OrderOutcome.InvalidPaymentMethod, 0);
         }
@@ -42,29 +51,13 @@ public class OrderProcessor(
             total += product.Price;
         }
 
-        if (request.Discount > 0)
+        if (request.DiscountPercentage > 0)
         {
-            total -= total * request.Discount;
+            total -= total * (request.DiscountPercentage / 100m);
         }
 
-        var providers = paymentProviderOptions.Value;
-        string paymentResult = string.Empty;
-        if (paymentMethod == PaymentMethod.CreditCard)
-        {
-            var client = new WebClient();
-            paymentResult = client.DownloadString(providers.CreditCardChargeUrl + "?amount=" + total);
-        }
-        else if (paymentMethod == PaymentMethod.PayPal)
-        {
-            var client = new WebClient();
-            paymentResult = client.DownloadString(providers.PayPalChargeUrl + "?amount=" + total);
-        }
-        else if (paymentMethod == PaymentMethod.BankTransfer)
-        {
-            paymentResult = "pending";
-        }
-
-        if (!paymentResult.Contains("success") && paymentResult != "pending")
+        var payment = await strategy.ChargeAsync(total, cancellationToken);
+        if (payment.Outcome == PaymentOutcome.Declined)
         {
             return new OrderResult(OrderOutcome.PaymentFailed, total);
         }
@@ -77,7 +70,7 @@ public class OrderProcessor(
             {
                 CustomerId = request.CustomerId,
                 Total = total,
-                Status = paymentResult == "pending" ? OrderStatus.Pending : OrderStatus.Completed,
+                Status = payment.Outcome == PaymentOutcome.Pending ? OrderStatus.Pending : OrderStatus.Completed,
                 PaymentMethod = paymentMethod
             });
 
@@ -85,27 +78,21 @@ public class OrderProcessor(
             await transaction.CommitAsync(cancellationToken);
         }
 
-        var smtpSettings = smtpOptions.Value;
         try
         {
-            var smtp = new SmtpClient(smtpSettings.Host, smtpSettings.Port);
-            smtp.Credentials = new NetworkCredential(smtpSettings.Username, smtpSettings.Password);
-            smtp.EnableSsl = true;
-
-            var mail = new MailMessage();
-            mail.From = new MailAddress(smtpSettings.FromAddress);
-            mail.To.Add(request.CustomerEmail);
-            mail.Subject = "Order Confirmation";
-            mail.Body = "Your order has been placed. Total: $" + total;
-
-            smtp.Send(mail);
+            await emailSender.SendAsync(
+                request.CustomerEmail,
+                ConfirmationEmailSubject,
+                $"Your order has been placed. Total: ${total}",
+                cancellationToken);
 
             return new OrderResult(OrderOutcome.Completed, total);
         }
         catch (Exception ex)
         {
-            // Log error but don't fail the order
-            Console.WriteLine("Email failed: " + ex.Message);
+            // The order stands even when the confirmation email fails.
+            logger.LogError(ex, "Confirmation email to {Email} failed for customer {CustomerId}",
+                request.CustomerEmail, request.CustomerId);
             return new OrderResult(OrderOutcome.CompletedEmailFailed, total);
         }
     }

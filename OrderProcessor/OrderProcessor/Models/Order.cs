@@ -1,5 +1,11 @@
 namespace RefactoringExercise.Models;
 
+public enum OrderStatus
+{
+    Pending,
+    Completed
+}
+
 public class Order
 {
     public int Id { get; set; }

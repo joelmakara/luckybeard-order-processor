@@ -1,12 +1,12 @@
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
+using RefactoringExercise.Controllers;
 using RefactoringExercise.Data;
+using RefactoringExercise.Email;
 using RefactoringExercise.Options;
+using RefactoringExercise.Payments;
 using RefactoringExercise.Services;
 
-var builder = Host.CreateApplicationBuilder(args);
+var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.Configure<SmtpOptions>(
     builder.Configuration.GetSection(SmtpOptions.SectionName));
@@ -18,6 +18,38 @@ var connectionString = builder.Configuration.GetConnectionString("Orders")
 
 builder.Services.AddDbContext<OrdersDbContext>(options => options.UseSqlServer(connectionString));
 
+builder.Services.AddHttpClient<CreditCardPaymentStrategy>();
+builder.Services.AddHttpClient<PayPalPaymentStrategy>();
+builder.Services.AddScoped<BankTransferPaymentStrategy>();
+builder.Services.AddScoped<IPaymentStrategy>(sp => sp.GetRequiredService<CreditCardPaymentStrategy>());
+builder.Services.AddScoped<IPaymentStrategy>(sp => sp.GetRequiredService<PayPalPaymentStrategy>());
+builder.Services.AddScoped<IPaymentStrategy>(sp => sp.GetRequiredService<BankTransferPaymentStrategy>());
+
+if (builder.Environment.IsProduction())
+{
+    builder.Services.AddScoped<IEmailSender, SmtpEmailSender>();
+}
+else
+{
+    builder.Services.AddScoped<IEmailSender, NoOpEmailSender>();
+}
+
 builder.Services.AddScoped<IOrderProcessor, OrderProcessor>();
 
-using var host = builder.Build();
+builder.Services.AddControllers();
+builder.Services.AddOpenApi();
+builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
+builder.Services.AddProblemDetails();
+
+var app = builder.Build();
+
+app.UseExceptionHandler();
+
+if (app.Environment.IsDevelopment())
+{
+    app.MapOpenApi();
+}
+
+app.MapControllers();
+
+app.Run();
