@@ -430,4 +430,4 @@ FodyWeavers.xsd
 
 # Local environment files
 .env
-orders.db
+orders.db*
