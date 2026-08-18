@@ -1,215 +1,166 @@
-# Technical Assessment: .NET Refactoring & Architecture Challenge
+# Order Processor
 
-This repository holds my solution to Lucky Beard's .NET refactoring assessment.
-The brief below is copied verbatim from the assessment page (an external
-Confluence share), since shared links can expire. The starter code it refers to
-is preserved unmodified in the baseline commit.
+My solution to the .NET refactoring and architecture exercise. The original
+brief is kept in [docs/brief.md](docs/brief.md), and the inherited code sits
+untouched in the first commit, so the git history reads as the refactor
+itself: each commit is one reviewable step from a god-class to a working,
+tested API.
 
----
+## Running it
 
-## Introduction to the file
+The only requirement is the .NET 10 SDK. In Development the API uses a local
+SQLite file which it creates and seeds on startup, so there is nothing to
+install or configure.
 
-You have inherited a legacy Order Processor Flow that has become unwieldy and hard to maintain.
-
-Identify issues, improve upon the file.
-
-This is not a real flow, so do not worry too much about actual flows running end-to-end.
-
-Please add mock endpoints to the flow.
-
-Make use of .net 8-10 concepts.
-
-## Candidate Tasks
-
-```csharp
-using System;
-using System.Collections.Generic;
-using System.Data.SqlClient;
-using System.Linq;
-using System.Net;
-using System.Net.Mail;
-
-namespace RefactoringExercise
-{
-    // This is the messy code that needs refactoring.
-
-    public class Order
-    {
-        public int Id { get; set; }
-        public int CustomerId { get; set; }
-        public decimal Total { get; set; }
-        public string Status { get; set; } = string.Empty;
-        public string PaymentMethod { get; set; } = string.Empty;
-    }
-
-    public class Product
-    {
-        public int Id { get; set; }
-        public string Name { get; set; } = string.Empty;
-        public decimal Price { get; set; }
-    }
-
-    public class ProcessRequest
-    {
-        public int CustomerId { get; set; }
-        public string CustomerEmail { get; set; } = string.Empty;
-        public List<string> Items { get; set; } = new();
-        public string PaymentMethod { get; set; } = string.Empty;
-        public decimal Discount { get; set; }
-    }
-
-    public class OrderProcessor
-    {
-        public string DoProcess(int id, string c_email, List<string> i, string method, double disc)
-        {
-            // Connect to database
-            var conn = new SqlConnection("Server=localhost;Database=Orders;User Id=sa;Password=P@ssw0rd;");
-            conn.Open();
-
-            // Calculate total
-            double total = 0;
-            foreach (var item in i)
-            {
-                var cmd = new SqlCommand("SELECT Price FROM Products WHERE Name = '" + item + "'", conn);
-                var price = (double)cmd.ExecuteScalar();
-                total = total + price;
-            }
-
-            // Apply discount
-            if (disc > 0)
-            {
-                total = total - (total * disc);
-            }
-
-            // Validate payment method
-            if (method != "CreditCard" && method != "PayPal" && method != "BankTransfer")
-            {
-                conn.Close();
-                return "Invalid payment method";
-            }
-
-            // Process payment
-            // Payment processing response codes
-            // 202 = success
-            // 409 = duplicate order
-            // 500 = server error
-            // 400 = bad request
-            string pAyMeNtReSuLt = "";
-            if (method == "CreditCard")
-            {
-                // Call credit card API
-                var client = new WebClient();
-                pAyMeNtReSuLt = client.DownloadString("https://api.payment.com/charge?amount=" + total);
-            }
-            else if (method == "PayPal")
-            {
-                // Call PayPal API
-                var client = new WebClient();
-                pAyMeNtReSuLt = client.DownloadString("https://api.paypal.com/charge?amount=" + total);
-            }
-            else if (method == "BankTransfer")
-            {
-                // Bank transfer doesn't need API call
-                pAyMeNtReSuLt = "pending";
-            }
-
-            if (pAyMeNtReSuLt.Contains("success") || pAyMeNtReSuLt == "pending")
-            {
-                // Save order to database
-                var insertCmd = new SqlCommand(
-                    "INSERT INTO Orders (CustomerId, Total, Status, PaymentMethod) VALUES (" +
-                    id + ", " + total + ", 'Completed', '" + method + "')", conn);
-                insertCmd.ExecuteNonQuery();
-
-                // Send confirmation email
-                try
-                {
-                    var smtp = new SmtpClient("smtp.gmail.com", 587);
-                    smtp.Credentials = new NetworkCredential("noreply@company.com", "P@ssw0rd123");
-                    smtp.EnableSsl = true;
-                    var mail = new MailMessage();
-                    mail.From = new MailAddress("noreply@company.com");
-                    mail.To.Add(c_email);
-                    mail.Subject = "Order Confirmation";
-                    mail.Body = "Your order has been placed. Total: $" + total;
-                    smtp.Send(mail);
-                    conn.Close();
-                    return "Order processed successfully. Total: $" + total;
-                }
-                catch (Exception ex)
-                {
-                    // Log error but don't fail the order
-                    Console.WriteLine("Email failed: " + ex.Message);
-                    conn.Close();
-                    return "Order processed but email failed. Total: $" + total;
-                }
-            }
-            else
-            {
-                conn.Close();
-                return "Payment failed";
-            }
-        }
-
-        public List<string> FindHistory(string customer_id)
-        {
-            var conn = new SqlConnection("Server=localhost;Database=Orders;User Id=sa;Password=P@ssw0rd;");
-            conn.Open();
-            var cmd = new SqlCommand("SELECT * FROM Orders WHERE CustomerId = " + customer_id, conn);
-            var rEdAdEr = cmd.ExecuteReader();
-            var orders = new List<string>();
-            while (rEdAdEr.Read())
-            {
-                orders.Add("Order #" + rEdAdEr["Id"] + " - $" + rEdAdEr["Total"] + " - " + rEdAdEr["Status"]);
-            }
-            conn.Close();
-            return orders;
-        }
-    }
-}
+```bash
+cd OrderProcessor/OrderProcessor
+dotnet run
 ```
 
-## 1. Overview
+The API listens on http://localhost:5080. The seed data is customer 1
+(Ada Lovelace) and three products: Keyboard (49.99), Mouse (24.50) and
+Monitor (189.00).
 
-You have inherited a legacy Order Processor Flow that has become unwieldy and hard to maintain.
+Place an order:
 
-Your task is to review, analyse, and refactor the component into a solution that is:
+```bash
+curl -X POST http://localhost:5080/api/orders \
+  -H "Content-Type: application/json" \
+  -d '{"customerId":1,"customerEmail":"ada@example.com","items":["Keyboard","Mouse"],"paymentMethod":"CreditCard","discountPercentage":10}'
+```
 
-- Scalable
-- Maintainable
-- Performance
-- Well-structured
+The curl examples use bash quoting; on Windows, run them from Git Bash.
 
-The goal is not to shorten the code, but to improve its architecture, separation of concerns, and long-term maintainability.
+Fetch a customer's order history:
 
-We are interested in how the candidate thinks about:
+```bash
+curl http://localhost:5080/api/orders/history/1
+```
 
-- Architectural problems
-- Code security
-- .NET standards and Best practices
-- Single Responsibility and good Locality of Behavior Thinking
-- Interface segregation
-- Decoupling
-- Developer experience and maintainability thinking.
+Payment methods are CreditCard, PayPal and BankTransfer. In Development the
+two card providers resolve to mock endpoints under /mock on the same host,
+so the whole flow runs locally. Bank transfers involve no provider call and
+are recorded as pending. The OpenAPI document is served at /openapi/v1.json.
 
-## 2. What We Would Like to See
+Run the tests from the solution folder:
 
-What are some specific things we want to see in the solution.
+```bash
+cd OrderProcessor
+dotnet test
+```
 
-- Strategy Pattern [bonus]
-- Dependency Injection
-- Validation of Data
-- Logging (preferably wide)
-- Good Error Handling (coupled with good logging)
-- DB Transactions
-- No hard-coded Secrets, magic strings or magic numbers
+## Architecture
 
-## 3. Key Known Issues
+A single ASP.NET Core project organised by concern:
 
-- SQL Injection Vulnerability
-- Hard-coded DB Credentials
-- This code is a god-class that handles everything in the whole flow
-- Bad/No exception handling
-- Method/Variable naming
-- Memory leaks (not disposing of connections)
-- No dependency injection/tight coupling
+| Folder | Responsibility |
+|---|---|
+| Controllers | The HTTP edge: orders endpoint, mock payment providers, global exception handler |
+| Services | IOrderProcessor and the orchestrator |
+| Payments | IPaymentStrategy, the three provider strategies, payment result types |
+| Email | IEmailSender with SMTP and no-op implementations |
+| Data | EF Core DbContext and the Development seeder |
+| Models | Entities, the request DTO and result types |
+| Options | Typed configuration classes |
+
+A request enters OrdersController and is validated before any work happens.
+The orchestrator then does one job: resolve the payment strategy, confirm
+the customer exists, price the items in a single query, apply the discount,
+charge through the strategy, record the order inside a transaction, and send
+the confirmation email. Every external concern sits behind an interface and
+arrives by constructor injection.
+
+Decisions worth explaining:
+
+**Dependency rule inside one project.** The layout follows the Clean
+Architecture dependency rule: the orchestrator depends on abstractions,
+adapters implement them, and Program.cs composes everything. The boundaries
+are folders and interfaces because there is a single use case. The seams
+where separate projects would be cut if this grew are already in place:
+IOrderProcessor, IPaymentStrategy and IEmailSender. The brief's
+locality-of-behaviour point weighed in this choice; one readable project
+serves a single flow better than four assemblies.
+
+**DbContext used directly in the service.** EF's DbContext already provides
+repository and unit-of-work semantics, so wrapping it in a repository
+interface for one aggregate would add indirection without a second consumer
+to justify it. This is the one conscious deviation from a strict layered
+split, and it is the first seam to introduce if another data consumer
+appears.
+
+**Transaction scope.** The order insert runs inside an explicit database
+transaction. The transaction covers database work only; it is never held
+open across the payment or email network calls.
+
+**Email failure does not fail the order.** The legacy code intended this
+policy, and it is kept, made explicit and tested: the order commits first,
+and a failed confirmation is logged and reported as CompletedEmailFailed.
+
+**Wide logging.** Each order attempt emits exactly one structured event on
+every exit path, including unhandled exceptions: customer, item count,
+payment method, payment outcome with provider code, order outcome, total
+and duration. HTTP request logging covers the edge.
+
+**Money.** Totals are decimal end to end and rounded to cents (half away
+from zero) after the discount, so the charged amount and the stored amount
+are the same number. Amounts sent to providers are formatted with the
+invariant culture.
+
+**Configuration and secrets.** Non-secret settings live in appsettings.json
+with per-environment overlays. Secrets come from user-secrets in Development
+and environment variables elsewhere; .env.example documents them. Provider
+response codes (202, 400, 409, 500) live in the PaymentStatusCode enum, and
+enums serialise as names over JSON.
+
+## Issues found in the inherited code
+
+Beyond the problems the brief lists (SQL injection, hard-coded credentials,
+the god-class, exception handling, naming, undisposed connections, tight
+coupling), working through the file surfaced these:
+
+- The project did not compile: the code referenced System.Data.SqlClient
+  and the project never declared the package.
+- `(double)cmd.ExecuteScalar()` unboxes a SQL decimal into a double, which
+  throws InvalidCastException on the first product, and throws a null
+  reference when a product name is unknown, so the happy path could never
+  complete.
+- A pending bank transfer was inserted with status 'Completed'.
+- `"?amount=" + total` formats with the server culture; a comma-decimal
+  locale sends `amount=12,50` to the payment provider.
+- Payment success was detected with `Contains("success")` on a raw response
+  body while the providers document proper status codes.
+- The order was charged and inserted before anyone checked that the
+  customer exists, and nothing validated the request at all.
+- FindHistory took the customer id as a string, used SELECT *, never
+  disposed its reader, and returned display strings instead of data.
+- Money was computed in double while the entities store decimal.
+- WebClient has been obsolete since .NET 6.
+- Nothing stops the same request charging twice; the providers' 409
+  duplicate code hints at the missing idempotency (see next steps).
+
+## Where the brief's asks live
+
+| Ask | Where |
+|---|---|
+| Strategy pattern (bonus) | Payments/PaymentStrategies.cs |
+| Dependency injection | Program.cs composition root, constructor injection throughout |
+| Validation of data | Models/ProcessRequest.cs, enforced at the controller |
+| Wide logging | Services/OrderProcessor.cs, one event per attempt |
+| Error handling | Controllers/GlobalExceptionHandler.cs, typed outcomes, tested email policy |
+| DB transactions | Explicit transaction around the order insert |
+| No secrets or magic values | Options pattern, user-secrets, enums and named constants |
+| Mock endpoints | Controllers/MockPaymentProvidersController.cs |
+| .NET 8-10 concepts | Primary constructors, collection expressions, records, file-scoped namespaces, IExceptionHandler, built-in OpenAPI |
+
+## Next steps
+
+- Idempotency keys on order submission so a retried request cannot charge
+  twice.
+- An outbox for the confirmation email, so a crash between commit and send
+  cannot lose the message.
+- EF migrations in place of EnsureCreated outside Development.
+- Retry and circuit-breaker policies on the provider HTTP clients.
+- A settlement flow that moves pending bank-transfer orders to completed.
+- Authentication and authorisation on the API.
+- Separate projects along the existing interface seams once a second use
+  case arrives.

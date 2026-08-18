@@ -1,3 +1,4 @@
 <Solution>
+  <Project Path="OrderProcessor.Tests/OrderProcessor.Tests.csproj" />
   <Project Path="OrderProcessor/OrderProcessor.csproj" />
 </Solution>
