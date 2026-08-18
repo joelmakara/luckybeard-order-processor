@@ -7,9 +7,6 @@ public enum PaymentOutcome
     Declined
 }
 
-/// <summary>
-/// Response codes returned by the external payment providers.
-/// </summary>
 public enum PaymentStatusCode
 {
     Success = 202,

@@ -5,11 +5,6 @@ using RefactoringExercise.Options;
 
 namespace RefactoringExercise.Payments;
 
-/// <summary>
-/// Shared behaviour for providers charged over HTTP. The amount is always
-/// formatted with the invariant culture; the legacy string concatenation
-/// produced "12,50" on servers with a comma decimal separator.
-/// </summary>
 public abstract class HttpChargePaymentStrategy(HttpClient httpClient) : IPaymentStrategy
 {
     public abstract PaymentMethod Method { get; }
@@ -40,10 +35,6 @@ public class PayPalPaymentStrategy(HttpClient httpClient, IOptions<PaymentProvid
     protected override string ChargeUrl => options.Value.PayPalChargeUrl;
 }
 
-/// <summary>
-/// Bank transfers settle out of band, so there is no provider call;
-/// the order is recorded as pending until settlement.
-/// </summary>
 public class BankTransferPaymentStrategy : IPaymentStrategy
 {
     public PaymentMethod Method => PaymentMethod.BankTransfer;

@@ -28,7 +28,6 @@ public class ProcessRequest : IValidatableObject
                 "Items must not contain empty entries.", [nameof(Items)]);
         }
 
-        // Enum.TryParse alone would also accept numeric strings such as "2".
         if (int.TryParse(PaymentMethod, out _) || !Enum.TryParse<PaymentMethod>(PaymentMethod, out _))
         {
             yield return new ValidationResult(

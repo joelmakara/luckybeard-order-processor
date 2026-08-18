@@ -25,10 +25,6 @@ public class SmtpEmailSender(IOptions<SmtpOptions> smtpOptions) : IEmailSender
     }
 }
 
-/// <summary>
-/// Used outside production so the flow can run end to end without an
-/// SMTP server; the message is logged instead of sent.
-/// </summary>
 public class NoOpEmailSender(ILogger<NoOpEmailSender> logger) : IEmailSender
 {
     public Task SendAsync(string to, string subject, string body, CancellationToken cancellationToken = default)
